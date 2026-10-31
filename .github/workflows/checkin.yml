@@ -1,0 +1,28 @@
+name: PixAI daily check-in
+on:
+  schedule:
+    - cron: '17 3 * * *' # 매일 한국 시간 12:17 (UTC 03:17)
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pixai-daily-checkin
+  cancel-in-progress: false
+jobs:
+  checkin:
+    if: ${{ vars.PIXAI_READY == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python checkin.py
+        env:
+          PIXAI_STORAGE_STATE: ${{ secrets.PIXAI_STORAGE_STATE }}
+          PIXAI_CHECKIN_URL: ${{ vars.PIXAI_CHECKIN_URL }}
+          PIXAI_CLAIM_SELECTOR: ${{ vars.PIXAI_CLAIM_SELECTOR }}
+          PIXAI_DONE_SELECTOR: ${{ vars.PIXAI_DONE_SELECTOR }}
