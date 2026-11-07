@@ -1,4 +1,6 @@
 .venv/
 __pycache__/
 state.json
+token.txt
+.pixai_tokens.json
 *.zip

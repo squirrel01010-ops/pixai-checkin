@@ -1,56 +1,70 @@
-# PixAI 매일 출석
+# PixAI 자동 출석체크
 
-**폰만 사용하는 경우 [PHONE.md](PHONE.md)를 먼저 보세요.** PC 없이 Codespaces에서 최초 로그인하도록 구성했습니다.
+웹사이트/앱에서 매일 "일일 크레딧 받기"를 누르는 것과 똑같은 요청을 GitHub Actions가 대신 보냅니다.
+(PixAI 웹사이트의 받기 버튼도 내부적으로 `api.pixai.art/graphql`의 `dailyClaimQuota`를 호출합니다.
+유료 개발자 API를 쓰는 게 아니라 본인 로그인 상태로 버튼 누르는 것과 같습니다.)
+브라우저/서버 필요 없고, `checkin.py`는 파이썬 표준 라이브러리만 씁니다.
 
-별도 서버 없이 GitHub Actions에서 매일 한국 시간 12:17에 실행합니다.
-GitHub 실행 대기로 실제 시각은 늦어질 수 있습니다. 비공개 저장소는 계정의 Actions 사용량/과금 설정을 확인하세요.
+아이디/비밀번호 자동 로그인은 PixAI 로그인에 reCAPTCHA가 걸려 있어 하지 않습니다.
+처음에 한 번 직접 로그인해서 로그인 토큰을 복사해 두면, 그 다음부터는 매일 자동입니다.
 
-**현재 상태:** 실행 코드와 예약 설정을 준비했습니다. 이 환경에서 PixAI에 접속할 수 없어 실제 화면과 버튼을 확인하지 못했습니다.
-본인 계정 로그인, 아래 URL/선택자 설정, 수동 실행 확인이 필요하며 아직 출석이 활성화된 상태가 아닙니다.
-로그인 세션 만료, CAPTCHA 또는 추가 인증이 발생하면 실패하며 본인 PC에서 다시 로그인해야 합니다.
+- 실행 시각: 매일 한국 시간 09:17, 21:17 (두 번째는 재시도용. 이미 받았으면 그냥 넘어감)
+- 출석 전후 크레딧을 조회해 몇 크레딧 받았는지 로그에 찍습니다.
+- 여러 계정 지원: Secret에 토큰을 **한 줄에 하나씩** 넣으면 계정마다 따로 출석합니다.
+- **토큰 자동 갱신**: 로그인 토큰은 7일짜리입니다. 매시간 만료 시각을 확인해서 만료 3시간 전부터
+  웹사이트와 같은 방식(`refreshToken`)으로 새 토큰을 받고, Actions 캐시에 보관해 다음 실행부터 씁니다.
+  그래서 한 번 등록하면 다시 복사할 필요가 없습니다. 실패해서 만료되면 로그에 표시되니 그때만 다시 등록하세요.
+- 매시간 갱신 확인은 몇 초짜리지만 비공개 저장소는 Actions 무료 사용량(월 2000분)에서 한 달에 약 750분 정도 씁니다.
 
-## 1. 본인 PC에서 로그인
+## 설정 (폰으로도 가능)
 
-Python 3.10 이상을 설치하고 이 폴더에서 실행하세요.
+### 1. PixAI 토큰 얻기
+
+**방법 A — 웹사이트 로그인 토큰 (PC 크롬)**
+pixai.art 로그인 → F12 → Network 탭 → 페이지 새로고침 → `graphql` 요청 클릭 →
+Request Headers의 `authorization: Bearer xxxxx`에서 `xxxxx` 부분을 복사합니다.
+또는 `pip install -r requirements.txt && python -m playwright install chromium && python get_token.py`
+를 실행해 뜨는 창에서 로그인하면 `token.txt`에 자동 저장됩니다.
+로그아웃하거나 토큰이 만료되면 다시 복사해서 Secret을 교체하세요.
+
+**방법 B — 폰만 있는 경우 (북마크로 토큰 복사)**
+
+1. 폰 브라우저(크롬/사파리)에서 pixai.art에 접속해 **로그인**합니다. (앱 말고 웹사이트)
+2. 아무 페이지나 북마크를 추가한 뒤, 그 북마크를 **편집**해서
+   - 이름: `pixai토큰`
+   - 주소(URL): 저장소의 [`bookmarklet.js`](bookmarklet.js) 내용 전체(`javascript:`로 시작하는 한 줄)를 붙여넣고 저장합니다.
+3. pixai.art 페이지가 열린 상태에서
+   - 크롬: 주소창에 `pixai토큰`을 입력하고 목록에 뜨는 **북마크 항목**(별 아이콘)을 누릅니다.
+   - 사파리: 북마크 목록에서 `pixai토큰`을 누릅니다.
+4. "토큰 복사 완료" 알림이 뜨면 클립보드에 복사된 상태입니다.
+   복사 창이 대신 뜨면 안의 글자를 길게 눌러 **전체 선택 → 복사**하세요.
+
+주소창에 `javascript:...`를 직접 붙여넣으면 크롬이 앞의 `javascript:`를 지워버리니 북마크 방법을 쓰세요.
+
+**방법 C — API 키**
+pixai.art 프로필 설정에 **API Keys** 메뉴가 있으면 키를 만들어 넣어도 됩니다. (만료 없음)
+
+### 2. GitHub Secret 등록
+
+저장소 **Settings → Secrets and variables → Actions → New repository secret**
+
+- Name: `PIXAI_TOKEN`
+- Secret: 1번에서 복사한 토큰 (계정 여러 개면 한 줄에 하나씩)
+
+### 3. 테스트 실행
+
+**Actions → PixAI daily check-in → Run workflow** 를 눌러 실행하고 로그에
+`출석 완료! +N 크레딧` 또는 `오늘 이미 출석함`이 나오면 끝입니다. 이후 매일 자동으로 돕니다.
+
+## 로컬 실행
 
 ```sh
-python -m venv .venv
-# Linux/macOS
-source .venv/bin/activate
-# Windows PowerShell에서는 .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m playwright install chromium
-python login.py
+PIXAI_TOKEN=여기에토큰 python checkin.py
 ```
 
-열린 브라우저에서 직접 로그인한 뒤 터미널에서 Enter를 누릅니다.
-생성되는 `state.json`은 비밀번호에 준하는 정보입니다. 채팅, 저장소, 공개 로그에 올리지 마세요.
+## 문제 해결
 
-## 2. 실제 출석 화면 설정
-
-로그인한 브라우저에서 일일 크레딧 수령 화면을 엽니다. 그 화면의 전체 주소를 기록하세요.
-Playwright의 선택 도구로 일일 크레딧 수령 버튼과 이미 수령했음을 나타내는 표시를 확인합니다.
-
-```sh
-python -m playwright codegen --load-storage=state.json https://pixai.art
-```
-
-생성된 Python 코드를 그대로 넣는 것이 아니라 Playwright 문자열 선택자를 넣습니다.
-예를 들어 도구가 `get_by_role("button", name="실제 버튼 문구", exact=True)`를 표시하면
-`role=button[name="실제 버튼 문구"]`로 설정할 수 있습니다. 실제 문구는 화면에서 확인해야 합니다.
-`PIXAI_DONE_SELECTOR`는 오늘 이미 수령했다는 명확한 표시여야 하며 일반 성공 알림이나 보유 크레딧 숫자를 사용하지 마세요.
-페이지에서 추가 메뉴를 열어야 한다면 현재 스크립트에 그 단계를 추가해야 합니다.
-
-## 3. GitHub 예약 실행
-
-1. GitHub에 **비공개 저장소**를 만들고 이 폴더의 코드를 올립니다. `.github` 폴더도 포함하고 `state.json`은 제외하세요.
-2. 저장소 Settings → Secrets and variables → Actions → Secrets에 `PIXAI_STORAGE_STATE`를 만들고 `state.json` 전체 내용을 붙여 넣습니다.
-3. 같은 화면 Variables에 다음을 설정합니다.
-   - `PIXAI_CHECKIN_URL`: 실제 일일 크레딧 화면 주소
-   - `PIXAI_CLAIM_SELECTOR`: 실제 수령 버튼 선택자
-   - `PIXAI_DONE_SELECTOR`: 오늘 수령 완료 표시 선택자
-4. Actions → PixAI daily check-in → Run workflow를 실행하고 성공 여부와 PixAI의 수령 상태를 확인하세요.
-5. 검증 후 Actions Variables에 `PIXAI_READY`를 `true`로 설정하면 매일 예약 실행됩니다. `phone_setup.py`를 쓰면 검증 후 자동 설정합니다. 실패 알림은 GitHub의 Actions 알림 설정에서 켤 수 있습니다.
-
-로그인 세션은 실행마다 자동 갱신하여 저장하지 않습니다. 만료 시 `login.py`를 다시 실행하고 Secret을 교체하세요.
-중지하려면 Actions에서 이 워크플로를 Disable workflow로 설정합니다.
+- `인증 실패 (HTTP 401)`: 토큰이 틀렸거나 만료됨 → 위 방법으로 다시 복사해서 Secret 교체
+- 로그인 토큰은 실행 로그에 만료일이 찍힙니다. 자동 갱신이 되면 `토큰 자동 갱신 완료`가 찍힙니다. 웹에서 로그아웃하면 토큰이 무효화될 수 있으니 로그아웃하지 마세요.
+- 실행 안 됨: Actions 탭에서 워크플로가 Disable 상태인지 확인 (기본 브랜치에 workflow 파일이 있어야 예약 실행됨)
+- 중지: Actions → PixAI daily check-in → `...` → Disable workflow
