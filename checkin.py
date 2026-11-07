@@ -3,6 +3,8 @@
 PIXAI_TOKEN 환경 변수에 PixAI API 키 또는 로그인 토큰을 넣습니다.
 여러 계정은 줄바꿈 또는 쉼표로 구분합니다.
 """
+import base64
+import datetime
 import json
 import os
 import sys
@@ -53,7 +55,25 @@ def me(token):
     return resp["data"]["me"]
 
 
+def token_expiry(token):
+    """로그인 토큰(JWT)이면 만료 시각을 돌려준다. API 키면 None."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+        return datetime.datetime.fromtimestamp(int(payload["exp"]), datetime.timezone(datetime.timedelta(hours=9)))
+    except Exception:
+        return None
+
+
 def checkin(token, label):
+    exp = token_expiry(token)
+    if exp:
+        left = (exp - datetime.datetime.now(exp.tzinfo)).days
+        print(f"[{label}] 토큰 만료: {exp:%Y-%m-%d %H:%M} KST (약 {left}일 남음)")
+        if left < 3:
+            print(f"[{label}] 토큰이 곧 만료됩니다. 다시 복사해서 Secret을 교체하세요.", file=sys.stderr)
     user = me(token)
     name = user.get("username") or user.get("id")
     before = user.get("quotaAmount")
