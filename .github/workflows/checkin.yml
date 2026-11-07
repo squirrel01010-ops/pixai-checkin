@@ -26,6 +26,7 @@ jobs:
         id: run
         run: python3 checkin.py
         env:
+          PYTHONUNBUFFERED: '1'
           PIXAI_TOKEN: ${{ secrets.PIXAI_TOKEN }}
           PIXAI_MODE: ${{ github.event.schedule == '47 * * * *' && 'refresh' || 'claim' }}
       - name: Save refreshed tokens
