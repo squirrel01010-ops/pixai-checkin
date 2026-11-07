@@ -1,1 +1,1 @@
-playwright==1.58.0
+playwright==1.58.0  # get_token.py 전용 (checkin.py는 의존성 없음)

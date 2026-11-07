@@ -1,55 +1,97 @@
-"""Click only explicitly configured daily-credit controls and verify the result."""
+"""PixAI 일일 출석(무료 크레딧 수령) - GraphQL API 직접 호출.
+
+PIXAI_TOKEN 환경 변수에 PixAI API 키 또는 로그인 토큰을 넣습니다.
+여러 계정은 줄바꿈 또는 쉼표로 구분합니다.
+"""
 import json
 import os
 import sys
-from pathlib import Path
-from urllib.parse import urlparse
+import time
+import urllib.error
+import urllib.request
 
-from playwright.sync_api import sync_playwright
-
-
-def required(name):
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise ValueError(f"{name} 설정이 필요합니다. README.md를 참고하세요.")
-    return value
+API = "https://api.pixai.art/graphql"
+CLAIM = "mutation dailyClaimQuota { dailyClaimQuota }"
+ME = "query me { me { id username quotaAmount } }"
+ALREADY = ("already", "claimed", "today", "once")
 
 
-def run():
-    target = required("PIXAI_CHECKIN_URL")
-    if urlparse(target).scheme != "https" or urlparse(target).hostname != "pixai.art":
-        raise ValueError("출석 URL은 https://pixai.art 내의 주소여야 합니다.")
-    claim_selector = required("PIXAI_CLAIM_SELECTOR")
-    done_selector = required("PIXAI_DONE_SELECTOR")
-    raw = os.environ.get("PIXAI_STORAGE_STATE")
-    state = json.loads(raw) if raw else json.loads(Path("state.json").read_text())
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+def gql(token, query, retries=3):
+    body = json.dumps({"query": query}).encode()
+    req = urllib.request.Request(API, data=body, method="POST", headers={
+        "content-type": "application/json",
+        "authorization": f"Bearer {token}",
+        "user-agent": "pixai-checkin/1.0",
+        "origin": "https://pixai.art",
+        "referer": "https://pixai.art/",
+    })
+    for attempt in range(1, retries + 1):
         try:
-            context = browser.new_context(storage_state=state)
-            page = context.new_page()
-            page.set_default_timeout(20_000)
-            page.goto(target, wait_until="domcontentloaded", timeout=60_000)
-            # Wait for the actual claim/done controls; do not assume page load means login succeeded.
-            done = page.locator(done_selector)
-            claim = page.locator(claim_selector)
-            done.or_(claim).first.wait_for(state="visible", timeout=45_000)
-            if done.first.is_visible():
-                print("이미 출석 완료 상태입니다.")
-                return
-            if claim.count() != 1:
-                raise RuntimeError("출석 버튼이 하나로 특정되지 않습니다. 선택자를 확인하세요.")
-            claim.click()
-            done.first.wait_for(state="visible", timeout=30_000)
-            print("출석 완료 표시를 확인했습니다.")
-        finally:
-            browser.close()
+            with urllib.request.urlopen(req, timeout=30) as res:
+                return json.load(res)
+        except urllib.error.HTTPError as e:
+            text = e.read().decode(errors="replace")
+            if e.code in (401, 403):
+                raise RuntimeError(f"인증 실패 (HTTP {e.code}): {text[:200]}") from None
+            if attempt == retries:
+                raise RuntimeError(f"HTTP {e.code}: {text[:200]}") from None
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt == retries:
+                raise RuntimeError(f"네트워크 오류: {e}") from None
+        time.sleep(2 ** attempt)
+
+
+def errors_of(resp):
+    return [e.get("message", "") for e in resp.get("errors") or []]
+
+
+def me(token):
+    resp = gql(token, ME)
+    errs = errors_of(resp)
+    if errs:
+        raise RuntimeError("계정 조회 실패: " + "; ".join(errs))
+    return resp["data"]["me"]
+
+
+def checkin(token, label):
+    user = me(token)
+    name = user.get("username") or user.get("id")
+    before = user.get("quotaAmount")
+    errs = errors_of(gql(token, CLAIM))
+    after = me(token).get("quotaAmount")
+    gained = (int(after) - int(before)) if str(before).lstrip("-").isdigit() and str(after).lstrip("-").isdigit() else None
+
+    if errs:
+        msg = "; ".join(errs)
+        if any(k in msg.lower() for k in ALREADY):
+            print(f"[{label}] {name}: 오늘 이미 출석함 ({msg}) / 크레딧 {after}")
+            return True
+        print(f"[{label}] {name}: 출석 실패 - {msg}", file=sys.stderr)
+        return False
+
+    if gained:
+        print(f"[{label}] {name}: 출석 완료! +{gained} 크레딧 (현재 {after})")
+    else:
+        print(f"[{label}] {name}: 출석 요청 완료 (오늘 이미 받았거나 반영 지연) / 크레딧 {after}")
+    return True
+
+
+def main():
+    raw = os.environ.get("PIXAI_TOKEN", "")
+    tokens = [t.strip().removeprefix("Bearer ").strip()
+              for t in raw.replace(",", "\n").splitlines() if t.strip()]
+    if not tokens:
+        print("PIXAI_TOKEN이 비어 있습니다. README.md를 참고해 Secret을 등록하세요.", file=sys.stderr)
+        return 1
+    ok = True
+    for i, token in enumerate(tokens, 1):
+        try:
+            ok &= checkin(token, f"계정{i}")
+        except Exception as exc:
+            print(f"[계정{i}] 오류: {exc}", file=sys.stderr)
+            ok = False
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    try:
-        run()
-    except Exception as exc:
-        # Playwright errors can contain private page content; do not upload browser traces.
-        print(f"출석 실패 ({type(exc).__name__}). 세션 만료, 추가 인증, URL/선택자를 확인하세요.", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(main())
