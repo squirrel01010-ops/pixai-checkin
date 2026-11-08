@@ -1,9 +1,10 @@
 name: PixAI daily check-in
 on:
   schedule:
-    - cron: '17 0 * * *'  # 출석: 매일 한국 시간 09:17
-    - cron: '17 12 * * *' # 출석 재시도: 매일 한국 시간 21:17 (이미 받았으면 넘어감)
-    - cron: '47 * * * *'  # 토큰 갱신 확인: 매시간 (만료 3시간 이내일 때만 실제 갱신)
+    # GitHub 예약 실행은 자주 늦거나 빠지므로 30분마다 실행한다.
+    # 매번 출석을 시도하고(이미 받았으면 그냥 넘어감), 만료 3시간 이내면 토큰도 갱신한다.
+    - cron: '23 * * * *'
+    - cron: '53 * * * *'
   workflow_dispatch:
 permissions:
   contents: read
@@ -26,8 +27,9 @@ jobs:
         id: run
         run: python3 checkin.py
         env:
+          PYTHONUNBUFFERED: '1'
           PIXAI_TOKEN: ${{ secrets.PIXAI_TOKEN }}
-          PIXAI_MODE: ${{ github.event.schedule == '47 * * * *' && 'refresh' || 'claim' }}
+          PIXAI_MODE: claim
       - name: Save refreshed tokens
         if: always() && steps.run.outputs.changed == 'true'
         uses: actions/cache/save@v4
