@@ -157,7 +157,6 @@ def wait_and_refresh(token, label):
 
 def claim(token, label):
     user = me(token)
-    name = user.get("username") or user.get("id")
     before = user.get("quotaAmount")
     resp, _ = gql(token, CLAIM)
     errs = errors_of(resp)
@@ -165,18 +164,18 @@ def claim(token, label):
     if errs:
         msg = "; ".join(errs)
         if any(k in msg.lower() for k in ALREADY):
-            print(f"[{label}] {name}: 오늘 이미 출석함 / 크레딧 {after}")
+            print(f"[{label}] 오늘 이미 출석함 / 크레딧 {after}")
             return True
-        print(f"[{label}] {name}: 출석 실패 - {msg}", file=sys.stderr)
+        print(f"[{label}] 출석 실패 - {msg}", file=sys.stderr)
         return False
     try:
         gained = int(after) - int(before)
     except (TypeError, ValueError):
         gained = None
     if gained:
-        print(f"[{label}] {name}: 출석 완료! +{gained} 크레딧 (현재 {after})")
+        print(f"[{label}] 출석 완료! +{gained} 크레딧 (현재 {after})")
     else:
-        print(f"[{label}] {name}: 출석 요청 완료 / 크레딧 {after}")
+        print(f"[{label}] 출석 요청 완료 / 크레딧 {after}")
     return True
 
 
