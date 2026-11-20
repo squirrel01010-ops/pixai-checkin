@@ -2,27 +2,45 @@ name: PixAI daily check-in
 on:
   schedule:
     # GitHub 예약 실행은 자주 늦거나 빠지므로 30분마다 실행한다.
-    # 매번 출석을 시도하고(이미 받았으면 그냥 넘어감), 만료 3시간 이내면 토큰도 갱신한다.
+    # 매번 출석과 토큰 갱신을 시도하고, 만료 4시간 이내면 만료 직전까지 기다렸다가 갱신한다.
     - cron: '23 * * * *'
     - cron: '53 * * * *'
   workflow_dispatch:
 permissions:
   contents: read
+  actions: write # 예전 평문 토큰 캐시를 지우기 위해 필요
 concurrency:
   group: pixai-daily-checkin
   cancel-in-progress: false
 jobs:
   checkin:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 240 # 토큰 만료가 가까우면 만료 직전까지 기다렸다가 갱신하므로 길게 잡음
+    env:
+      PIXAI_CACHE_KEY: ${{ secrets.PIXAI_CACHE_KEY }}
     steps:
       - uses: actions/checkout@v4
+      - name: Delete old unencrypted token caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --key pixai-tokens- --limit 100 --json id -q '.[].id' \
+            | xargs -r -n1 gh cache delete --repo "$GITHUB_REPOSITORY" || true
+      # 갱신된 토큰은 PIXAI_CACHE_KEY로 암호화한 파일로만 캐시에 보관한다.
       - name: Restore refreshed tokens
         uses: actions/cache/restore@v4
         with:
-          path: .pixai_tokens.json
-          key: pixai-tokens-${{ github.run_id }}
-          restore-keys: pixai-tokens-
+          path: .pixai_tokens.enc
+          key: pixai-enc-${{ github.run_id }}
+          restore-keys: pixai-enc-
+      - name: Decrypt refreshed tokens
+        run: |
+          if [ -s .pixai_tokens.enc ] && [ -n "$PIXAI_CACHE_KEY" ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:PIXAI_CACHE_KEY \
+              -in .pixai_tokens.enc -out .pixai_tokens.json 2>/dev/null \
+              || { echo "캐시 복호화 실패 - Secret 토큰을 사용합니다"; rm -f .pixai_tokens.json; }
+          fi
+          rm -f .pixai_tokens.enc
       - name: Check in
         id: run
         run: python3 checkin.py
@@ -30,9 +48,23 @@ jobs:
           PYTHONUNBUFFERED: '1'
           PIXAI_TOKEN: ${{ secrets.PIXAI_TOKEN }}
           PIXAI_MODE: claim
-      - name: Save refreshed tokens
+          PIXAI_WAIT_REFRESH: '1'
+      - name: Encrypt refreshed tokens
+        id: enc
         if: always() && steps.run.outputs.changed == 'true'
+        run: |
+          if [ -z "$PIXAI_CACHE_KEY" ]; then
+            echo "::warning::PIXAI_CACHE_KEY Secret이 없어 갱신된 토큰을 저장하지 않습니다. README를 보고 등록하세요."
+            rm -f .pixai_tokens.json
+            exit 0
+          fi
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:PIXAI_CACHE_KEY \
+            -in .pixai_tokens.json -out .pixai_tokens.enc
+          rm -f .pixai_tokens.json
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+      - name: Save refreshed tokens
+        if: always() && steps.enc.outputs.ok == 'true'
         uses: actions/cache/save@v4
         with:
-          path: .pixai_tokens.json
-          key: pixai-tokens-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .pixai_tokens.enc
+          key: pixai-enc-${{ github.run_id }}-${{ github.run_attempt }}
